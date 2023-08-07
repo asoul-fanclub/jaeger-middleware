@@ -9,6 +9,8 @@ const (
 	name = "default_service_name"
 )
 
+// Options
+// TODO: body size, header config
 type Options struct {
 	tracer trace.Tracer
 }

@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"go.opentelemetry.io/otel/codes"
 	"google.golang.org/grpc"
 )
 
@@ -12,16 +13,20 @@ func NewJaegerMiddleware() *JaegerMiddleware {
 	return &JaegerMiddleware{}
 }
 
+// UnaryInterceptor TODO: one method will get one child span or controlled by LogWithContext
+// a service call
 func (jm *JaegerMiddleware) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	o := DefaultOptions()
 	newCtx, span := o.tracer.Start(ctx, info.FullMethod)
+	defer span.End()
+
 	resp, err := handler(newCtx, req)
 	if err != nil {
-		span.End()
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
 	fmt.Println(resp)
-	span.End()
 	return resp, err
 }
 

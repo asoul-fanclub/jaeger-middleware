@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "jaeger-middleware/test/proto;proto";
+
+service TestService {
+    rpc Get(GetReq) returns (GetResp);
+}
+
+message GetReq {
+  string name = 1;
+}
+
+message GetResp {
+  string name = 1;
+}

@@ -6,17 +6,20 @@ import (
 )
 
 const (
-	name = "default_service_name"
+	name     = "default_service_name"
+	inputKey = "input_param"
 )
 
 // Options
-// TODO: body size, header config
+// TODO: header config
 type Options struct {
-	tracer trace.Tracer
+	tracer      trace.Tracer
+	maxBodySize int
 }
 
 func DefaultOptions() Options {
 	o := Options{}
 	o.tracer = otel.Tracer(name)
+	o.maxBodySize = 10240
 	return o
 }

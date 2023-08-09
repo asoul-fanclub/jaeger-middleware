@@ -13,6 +13,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 type JaegerMiddleware struct{}
@@ -34,6 +35,7 @@ func (jm *JaegerMiddleware) UnaryInterceptor(ctx context.Context, req interface{
 		}
 		span.SetAttributes(attribute.String(inputKey, string(body)))
 	}
+	_ = grpc.SetHeader(ctx, metadata.Pairs(TraceHeader(), span.SpanContext().TraceID().String()))
 	span.SetAttributes(semconv.NetSockPeerAddrKey.String(Addr(ctx)))
 	resp, err := handler(newCtx, req)
 	defer finishServerSpan(span, err, o.maxBodySize)

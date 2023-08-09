@@ -15,10 +15,11 @@ var (
 )
 
 const (
-	Environment        = "ENVIRONMENT"
-	ServiceName        = "SERVICE_NAME"
-	DefaultEnvironment = "develop"
-	DefaultServiceName = "trace-demo"
+	Environment          = "ENVIRONMENT"
+	ServiceName          = "SERVICE_NAME"
+	DefaultEnvironment   = "develop"
+	DefaultServiceName   = "trace-demo"
+	DefaultTraceIDHeader = "trace-id"
 )
 
 type MetaData struct {
@@ -75,4 +76,8 @@ func Addr(ctx context.Context) (addr string) {
 		return p.Addr.String()
 	}
 	return "unknown peer addr"
+}
+
+func TraceHeader() string {
+	return DefaultTraceIDHeader
 }

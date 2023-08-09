@@ -4,15 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"jaeger-middleware/test/proto"
 )
 
-type UserService struct {
-}
+type UserService struct{}
 
-var (
-	mockErr = errors.New("mock error")
-)
+var mockErr = errors.New("mock error")
 
 func (u *UserService) Get(ctx context.Context, req *proto.GetReq) (*proto.GetResp, error) {
 	fmt.Println("Get~")

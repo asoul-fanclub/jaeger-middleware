@@ -50,7 +50,7 @@ func TestMiddlewareServer(t *testing.T) {
 
 func TestMiddlewareClient(t *testing.T) {
 	var addr string
-	addr = ":5005"
+	addr = ":50055"
 	ctx := context.Background()
 	var req1 = &proto.GetReq{
 		Name: "www3",

@@ -34,7 +34,7 @@ func NewJaegerClientMiddleware() *JaegerClientMiddleware {
 
 // UnaryInterceptor TODO: one method will get one child span or controlled by LogWithContext
 // a service call
-func (jm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+func (jsm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	o := DefaultOptions()
 
 	// Get "trace-id" from the request header
@@ -60,15 +60,27 @@ func (jm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req inte
 	return resp, err
 }
 
-func (jm *JaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+func (jsm *JaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	return nil
 }
 
-func (jc *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-	return nil
+func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	o := DefaultOptions()
+	var handlerErr error
+
+	newCtx, span := newClientSpan(ctx, o.tracer, method)
+	if body, _ := json.Marshal(req); len(body) > 0 {
+		if len(body) > o.maxBodySize {
+			body = []byte(`input body too large`)
+		}
+		span.SetAttributes(attribute.String(inputKey, string(body)))
+	}
+
+	handlerErr = invoker(newCtx, method, req, reply, cc, opts...)
+	return handlerErr
 }
 
-func (jm *JaegerClientMiddleware) StreamClientInterceptor(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+func (jcm *JaegerClientMiddleware) StreamClientInterceptor(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	return nil, nil
 }
 
@@ -93,6 +105,15 @@ func newServerSpan(ctx context.Context, tracer trace.Tracer, spanName string) (c
 	newCtx, span := tracer.Start(
 		ctx, spanName,
 		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithTimestamp(time.Now()),
+	)
+	return trace.ContextWithSpan(newCtx, span), span
+}
+
+func newClientSpan(ctx context.Context, tracer trace.Tracer, spanName string) (context.Context, trace.Span) {
+	newCtx, span := tracer.Start(
+		ctx, spanName,
+		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithTimestamp(time.Now()),
 	)
 	return trace.ContextWithSpan(newCtx, span), span

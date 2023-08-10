@@ -20,15 +20,21 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-type JaegerMiddleware struct{}
+type JaegerServerMiddleware struct{}
 
-func NewJaegerMiddleware() *JaegerMiddleware {
-	return &JaegerMiddleware{}
+func NewJaegerServerMiddleware() *JaegerServerMiddleware {
+	return &JaegerServerMiddleware{}
+}
+
+type JaegerClientMiddleware struct{}
+
+func NewJaegerClientMiddleware() *JaegerClientMiddleware {
+	return &JaegerClientMiddleware{}
 }
 
 // UnaryInterceptor TODO: one method will get one child span or controlled by LogWithContext
 // a service call
-func (jm *JaegerMiddleware) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+func (jm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	o := DefaultOptions()
 
 	// Get "trace-id" from the request header
@@ -54,8 +60,16 @@ func (jm *JaegerMiddleware) UnaryInterceptor(ctx context.Context, req interface{
 	return resp, err
 }
 
-func (jm *JaegerMiddleware) StreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+func (jm *JaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	return nil
+}
+
+func (jc *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	return nil
+}
+
+func (jm *JaegerClientMiddleware) StreamClientInterceptor(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return nil, nil
 }
 
 func finishServerSpan(span trace.Span, err error, bodySize int) {

@@ -3,6 +3,8 @@ package jaeger_middleware
 import (
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/assert"
+	"google.golang.org/grpc/credentials/insecure"
 	"log"
 	"net"
 	"testing"
@@ -15,7 +17,7 @@ import (
 	"jaeger-middleware/test/proto"
 )
 
-func TestMiddleware(t *testing.T) {
+func TestMiddlewareServer(t *testing.T) {
 	tp, _ := middleware.TracerProvider("http://localhost:14268/api/traces")
 	otel.SetTracerProvider(tp)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -32,8 +34,8 @@ func TestMiddleware(t *testing.T) {
 	}(ctx)
 
 	server := grpc.NewServer(
-		grpc.UnaryInterceptor(middleware.NewJaegerMiddleware().UnaryInterceptor),
-		grpc.StreamInterceptor(middleware.NewJaegerMiddleware().StreamInterceptor),
+		grpc.UnaryInterceptor(middleware.NewJaegerServerMiddleware().UnaryInterceptor),
+		grpc.StreamInterceptor(middleware.NewJaegerServerMiddleware().StreamInterceptor),
 	)
 	proto.RegisterTestServiceServer(server, new(test.UserService))
 	list, err := net.Listen("tcp", ":50055")
@@ -44,6 +46,35 @@ func TestMiddleware(t *testing.T) {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func TestMiddlewareClient(t *testing.T) {
+	var addr string
+	addr = ":5005"
+	ctx := context.Background()
+	var req1 = &proto.GetReq{
+		Name: "www3",
+	}
+	var req2 = &proto.GetReq{
+		Name: "www",
+	}
+	conn, err := grpc.Dial(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(middleware.NewJaegerClientMiddleware().UnaryClientInterceptor),
+		grpc.WithStreamInterceptor(middleware.NewJaegerClientMiddleware().StreamClientInterceptor),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+	client := proto.NewTestServiceClient(conn)
+	resp, err := client.Get(ctx, req1)
+	if err != nil {
+		log.Fatal(err)
+	}
+	assert.Equal(t, req1.GetName(), resp.GetName())
+	_, err = client.Get(ctx, req2)
+	assert.NotNil(t, err)
 }
 
 func TestTraceID(t *testing.T) {

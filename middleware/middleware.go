@@ -2,7 +2,11 @@ package middleware
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"encoding/json"
+	"math/rand"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -26,6 +30,13 @@ func NewJaegerMiddleware() *JaegerMiddleware {
 // a service call
 func (jm *JaegerMiddleware) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	o := DefaultOptions()
+
+	// Get "trace-id" from the request header
+	traceID, _ := GetTraceIDFromHeader(ctx)
+	if traceID.String() != "" {
+		ctx = context.WithValue(ctx, "trace-id", traceID.String())
+	}
+
 	newCtx, span := newServerSpan(ctx, o.tracer, info.FullMethod)
 	defer span.End(trace.WithTimestamp(time.Now()))
 
@@ -35,10 +46,11 @@ func (jm *JaegerMiddleware) UnaryInterceptor(ctx context.Context, req interface{
 		}
 		span.SetAttributes(attribute.String(inputKey, string(body)))
 	}
+
 	_ = grpc.SetHeader(ctx, metadata.Pairs(TraceHeader(), span.SpanContext().TraceID().String()))
 	span.SetAttributes(semconv.NetSockPeerAddrKey.String(Addr(ctx)))
 	resp, err := handler(newCtx, req)
-	defer finishServerSpan(span, err, o.maxBodySize)
+	finishServerSpan(span, err, o.maxBodySize)
 	return resp, err
 }
 
@@ -72,29 +84,81 @@ func newServerSpan(ctx context.Context, tracer trace.Tracer, spanName string) (c
 	return trace.ContextWithSpan(newCtx, span), span
 }
 
-////
-////type JaegerIDGenerator struct {
-////	traceID int
-////	spanID  int
-////}
-////
-////func (gen *JaegerIDGenerator) NewIDs(ctx context.Context) (trace.TraceID, trace.SpanID) {
-////	// TODO: get trace from header
-////	traceIDHex := fmt.Sprintf("%032x", gen.traceID)
-////	traceID, _ := trace.TraceIDFromHex(traceIDHex)
-////	spanID := gen.NewSpanID(ctx, traceID)
-////	gen.traceID++
-////	return traceID, spanID
-////}
-////
-////func (gen *JaegerIDGenerator) NewSpanID(ctx context.Context, traceID trace.TraceID) trace.SpanID {
-////	spanIDHex := fmt.Sprintf("%016x", gen.spanID)
-////	spanID, _ := trace.SpanIDFromHex(spanIDHex)
-////	gen.spanID++
-////	return spanID
-////}
-//
-//var _ traceSdk.IDGenerator = (*JaegerIDGenerator)(nil)
+type JaegerIDGenerator struct {
+	traceID string
+	spanID  string
+	sync.Mutex
+	randSource *rand.Rand
+}
+
+func (gen *JaegerIDGenerator) NewIDs(ctx context.Context) (trace.TraceID, trace.SpanID) {
+	if gen.randSource == nil {
+		gen.defaultIDGenerator()
+	}
+	if ctx.Value("trace-id") != "" {
+		s, ok := ctx.Value("trace-id").(string)
+		if !ok {
+			return gen.newRandIDs()
+		}
+		t, _ := trace.TraceIDFromHex(s)
+		return t, gen.newRandSpanID()
+	}
+
+	return gen.newRandIDs()
+}
+
+func (gen *JaegerIDGenerator) NewSpanID(ctx context.Context, traceID trace.TraceID) trace.SpanID {
+	if gen.randSource == nil {
+		gen.defaultIDGenerator()
+	}
+	return gen.newRandSpanID()
+}
+
+var _ traceSdk.IDGenerator = (*JaegerIDGenerator)(nil)
+
+func (gen *JaegerIDGenerator) newRandIDs() (trace.TraceID, trace.SpanID) {
+	gen.Lock()
+	defer gen.Unlock()
+	tid := trace.TraceID{}
+	_, _ = gen.randSource.Read(tid[:])
+	sid := trace.SpanID{}
+	_, _ = gen.randSource.Read(sid[:])
+	return tid, sid
+}
+
+// NewSpanID returns a non-zero span ID from a randomly-chosen sequence.
+func (gen *JaegerIDGenerator) newRandSpanID() trace.SpanID {
+	gen.Lock()
+	defer gen.Unlock()
+	sid := trace.SpanID{}
+	_, _ = gen.randSource.Read(sid[:])
+	return sid
+}
+
+func (gen *JaegerIDGenerator) defaultIDGenerator() {
+	gen.Lock()
+	defer gen.Unlock()
+	if gen.randSource == nil {
+		var rngSeed int64
+		_ = binary.Read(crand.Reader, binary.LittleEndian, &rngSeed)
+		gen.randSource = rand.New(rand.NewSource(rngSeed))
+	}
+}
+
+// GetTraceIDFromHeader tries to extract the trace ID from the request header.
+func GetTraceIDFromHeader(ctx context.Context) (trace.TraceID, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	traceIDs := md.Get("trace-id")
+	if len(traceIDs) > 0 {
+		traceIDStr := traceIDs[0]
+		traceID, err := trace.TraceIDFromHex(traceIDStr)
+		if err != nil {
+			return trace.TraceID{}, err
+		}
+		return traceID, nil
+	}
+	return trace.TraceID{}, nil
+}
 
 // TracerProvider returns an OpenTelemetry TracerProvider configured to use
 // the Jaeger exporter that will send spans to the provided url. The returned
@@ -111,7 +175,7 @@ func TracerProvider(url string) (*traceSdk.TracerProvider, error) {
 	tp := traceSdk.NewTracerProvider(
 		// Always be sure to batch in production.
 		traceSdk.WithBatcher(exp),
-		// traceSdk.WithIDGenerator(&JaegerIDGenerator{}),
+		traceSdk.WithIDGenerator(&JaegerIDGenerator{}),
 		// Record information about this application in a Resource.
 		traceSdk.WithResource(resource.NewWithAttributes(
 			semconv.SchemaURL,

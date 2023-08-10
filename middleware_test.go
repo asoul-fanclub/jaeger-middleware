@@ -45,3 +45,9 @@ func TestMiddleware(t *testing.T) {
 		log.Fatal(err)
 	}
 }
+
+func TestTraceID(t *testing.T) {
+	g := middleware.JaegerIDGenerator{}
+	tt, _ := g.NewIDs(context.Background())
+	println(tt.String())
+}

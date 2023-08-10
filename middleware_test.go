@@ -51,7 +51,7 @@ func TestMiddlewareServer(t *testing.T) {
 func TestMiddlewareClient(t *testing.T) {
 	var addr string
 	addr = ":50055"
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), "trace-id", "d2ecfc1b248ab875b2cc706696874da3")
 	var req1 = &proto.GetReq{
 		Name: "www3",
 	}

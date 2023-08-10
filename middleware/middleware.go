@@ -5,6 +5,7 @@ import (
 	crand "crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"math/rand"
 	"sync"
 	"time"
@@ -20,26 +21,26 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-type JaegerServerMiddleware struct{}
+type jaegerServerMiddleware struct{}
 
-func NewJaegerServerMiddleware() *JaegerServerMiddleware {
-	return &JaegerServerMiddleware{}
+func NewJaegerServerMiddleware() *jaegerServerMiddleware {
+	return &jaegerServerMiddleware{}
 }
 
-type JaegerClientMiddleware struct{}
+type jaegerClientMiddleware struct{}
 
-func NewJaegerClientMiddleware() *JaegerClientMiddleware {
-	return &JaegerClientMiddleware{}
+func NewJaegerClientMiddleware() *jaegerClientMiddleware {
+	return &jaegerClientMiddleware{}
 }
 
 // UnaryInterceptor TODO: one method will get one child span or controlled by LogWithContext
 // a service call
-func (jsm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+func (jsm *jaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	o := DefaultOptions()
 
 	// Get "trace-id" from the request header
 	traceID, _ := GetTraceIDFromHeader(ctx)
-	if traceID.String() != "" {
+	if traceID.IsValid() {
 		ctx = context.WithValue(ctx, "trace-id", traceID.String())
 	}
 
@@ -53,18 +54,17 @@ func (jsm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req int
 		span.SetAttributes(attribute.String(inputKey, string(body)))
 	}
 
-	_ = grpc.SetHeader(ctx, metadata.Pairs(TraceHeader(), span.SpanContext().TraceID().String()))
 	span.SetAttributes(semconv.NetSockPeerAddrKey.String(Addr(ctx)))
 	resp, err := handler(newCtx, req)
 	finishServerSpan(span, err, o.maxBodySize)
 	return resp, err
 }
 
-func (jsm *JaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+func (jsm *jaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	return nil
 }
 
-func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+func (jcm *jaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 	o := DefaultOptions()
 	var handlerErr error
 
@@ -75,12 +75,15 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 		}
 		span.SetAttributes(attribute.String(inputKey, string(body)))
 	}
-
+	if traceIDStr, ok := newCtx.Value("trace-id").(string); ok && traceIDStr != "" {
+		md := metadata.Pairs(TraceHeader(), traceIDStr)
+		newCtx = metadata.NewOutgoingContext(newCtx, md)
+	}
 	handlerErr = invoker(newCtx, method, req, reply, cc, opts...)
 	return handlerErr
 }
 
-func (jcm *JaegerClientMiddleware) StreamClientInterceptor(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+func (jcm *jaegerClientMiddleware) StreamClientInterceptor(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	return nil, nil
 }
 
@@ -182,7 +185,10 @@ func (gen *JaegerIDGenerator) defaultIDGenerator() {
 
 // GetTraceIDFromHeader tries to extract the trace ID from the request header.
 func GetTraceIDFromHeader(ctx context.Context) (trace.TraceID, error) {
-	md, _ := metadata.FromIncomingContext(ctx)
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return trace.TraceID{}, errors.New("failed to get metadata from context")
+	}
 	traceIDs := md.Get("trace-id")
 	if len(traceIDs) > 0 {
 		traceIDStr := traceIDs[0]

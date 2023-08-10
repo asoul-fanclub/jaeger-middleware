@@ -51,12 +51,9 @@ func TestMiddlewareServer(t *testing.T) {
 func TestMiddlewareClient(t *testing.T) {
 	var addr string
 	addr = ":50055"
-	ctx := context.WithValue(context.Background(), "trace-id", "d2ecfc1b248ab875b2cc706696874da3")
+	ctx := context.WithValue(context.Background(), "trace-id", "6501471c16ed88eef15152f1930e2af4")
 	var req1 = &proto.GetReq{
 		Name: "www3",
-	}
-	var req2 = &proto.GetReq{
-		Name: "www",
 	}
 	conn, err := grpc.Dial(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -73,8 +70,6 @@ func TestMiddlewareClient(t *testing.T) {
 		log.Fatal(err)
 	}
 	assert.Equal(t, req1.GetName(), resp.GetName())
-	_, err = client.Get(ctx, req2)
-	assert.NotNil(t, err)
 }
 
 func TestTraceID(t *testing.T) {

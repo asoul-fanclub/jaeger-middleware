@@ -13,13 +13,17 @@ const (
 // Options
 // TODO: header config
 type Options struct {
-	tracer      trace.Tracer
-	maxBodySize int
+	tracer        trace.Tracer
+	maxBodySize   int
+	serverEnabled bool
+	clientEnabled bool
 }
 
 func DefaultOptions() Options {
 	o := Options{}
 	o.tracer = otel.Tracer(name)
 	o.maxBodySize = 10240
+	o.serverEnabled = true
+	o.clientEnabled = false
 	return o
 }

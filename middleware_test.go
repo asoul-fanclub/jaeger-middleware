@@ -3,22 +3,22 @@ package jaeger_middleware
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/assert"
-	"google.golang.org/grpc/credentials/insecure"
 	"log"
 	"net"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"jaeger-middleware/middleware"
 	"jaeger-middleware/test"
 	"jaeger-middleware/test/proto"
 )
 
 func TestMiddlewareServer(t *testing.T) {
-	tp, _ := middleware.TracerProvider("http://localhost:14268/api/traces")
+	tp, _ := middleware.TracerProvider("http://localhost:14268/api/traces", false)
 	otel.SetTracerProvider(tp)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -51,8 +51,8 @@ func TestMiddlewareServer(t *testing.T) {
 func TestMiddlewareClient(t *testing.T) {
 	var addr string
 	addr = ":50055"
-	ctx := context.WithValue(context.Background(), "trace-id", "6501471c16ed88eef15152f1930e2af4")
-	var req1 = &proto.GetReq{
+	ctx := context.WithValue(context.Background(), "trace-id", "659b48a7f511ec8f26f77402adc6ade1")
+	req1 := &proto.GetReq{
 		Name: "www3",
 	}
 	conn, err := grpc.Dial(addr,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"jaeger-middleware/middleware"
@@ -19,7 +20,7 @@ func (u *UserService) Get(ctx context.Context, req *proto.GetReq) (*proto.GetRes
 	if req.GetName() == "www" {
 		return nil, mockErr
 	}
-	var req1 = &proto.GetReq{
+	req1 := &proto.GetReq{
 		Name: "www",
 	}
 	conn, err := grpc.Dial(":50055",

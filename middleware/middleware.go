@@ -34,7 +34,7 @@ func (jsm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req int
 	var span trace.Span
 
 	// Get DefaultTraceIDHeader from the request header
-	traceID, _ := GetTraceIDFromHeader(ctx)
+	traceID, ctx, _ := GetTraceIDFromHeader(ctx)
 	if traceID.IsValid() {
 		ctx = context.WithValue(ctx, DefaultTraceIDHeader, traceID.String())
 	}
@@ -63,7 +63,7 @@ func (jsm *JaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.Se
 	o := DefaultOptions()
 	ctx := ss.Context()
 
-	traceID, _ := GetTraceIDFromHeader(ctx)
+	traceID, ctx, _ := GetTraceIDFromHeader(ctx)
 	if traceID.IsValid() {
 		ctx = context.WithValue(ctx, DefaultTraceIDHeader, traceID.String())
 	}
@@ -89,12 +89,11 @@ func (jsm *JaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.Se
 }
 
 func newServerSpan(ctx context.Context, tracer trace.Tracer, spanName string) (context.Context, trace.Span) {
-	newCtx, span := tracer.Start(
+	return tracer.Start(
 		ctx, spanName,
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithTimestamp(time.Now()),
 	)
-	return trace.ContextWithSpan(newCtx, span), span
 }
 
 func finishServerSpan(span trace.Span, err error, bodySize int) {
@@ -115,21 +114,31 @@ func finishServerSpan(span trace.Span, err error, bodySize int) {
 }
 
 // GetTraceIDFromHeader tries to extract the trace ID from the request header.
-func GetTraceIDFromHeader(ctx context.Context) (trace.TraceID, error) {
+func GetTraceIDFromHeader(ctx context.Context) (trace.TraceID, context.Context, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return trace.TraceID{}, FailToGetMeta
+		return trace.TraceID{}, ctx, FailToGetMeta
 	}
 	traceIDs := md.Get(DefaultTraceIDHeader)
+	curSpanContext := md.Get(CurrentSpanContext)
 	if len(traceIDs) > 0 {
 		traceIDStr := traceIDs[0]
 		traceID, err := trace.TraceIDFromHex(traceIDStr)
 		if err != nil {
-			return trace.TraceID{}, err
+			return trace.TraceID{}, ctx, err
 		}
-		return traceID, nil
+		if len(curSpanContext) > 0 {
+			spanID, err := trace.SpanIDFromHex(curSpanContext[0])
+			if err != nil {
+				return traceID, ctx, err
+			}
+			ctx = trace.ContextWithSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID: traceID,
+			}).WithSpanID(spanID))
+		}
+		return traceID, ctx, nil
 	}
-	return trace.TraceID{}, nil
+	return trace.TraceID{}, ctx, nil
 }
 
 type wrappedServerStream struct {
@@ -162,7 +171,7 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 	o := DefaultOptions()
 	var handlerErr error
 
-	newCtx, span := newClientSpan(ctx, o.tracer, method)
+	ctx, span := newClientSpan(ctx, o.tracer, method)
 	defer span.End()
 
 	if body, _ := json.Marshal(req); len(body) > 0 {
@@ -172,11 +181,12 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 		span.SetAttributes(attribute.String(inputKey, string(body)))
 	}
 
-	if traceIDStr, ok := newCtx.Value(DefaultTraceIDHeader).(string); ok && traceIDStr != "" {
+	if traceIDStr, ok := ctx.Value(DefaultTraceIDHeader).(string); ok && traceIDStr != "" {
 		md := metadata.Pairs(TraceHeader(), traceIDStr)
-		newCtx = metadata.NewOutgoingContext(newCtx, md)
+		md.Append(CurrentSpanContext, trace.SpanFromContext(ctx).SpanContext().SpanID().String())
+		ctx = metadata.NewOutgoingContext(ctx, md)
 	}
-	handlerErr = invoker(newCtx, method, req, reply, cc, opts...)
+	handlerErr = invoker(ctx, method, req, reply, cc, opts...)
 	finishClientSpan(span, handlerErr, o.maxBodySize)
 
 	return handlerErr
@@ -223,12 +233,11 @@ func finishClientSpan(span trace.Span, err error, bodySize int) {
 }
 
 func newClientSpan(ctx context.Context, tracer trace.Tracer, spanName string) (context.Context, trace.Span) {
-	newCtx, span := tracer.Start(
+	return tracer.Start(
 		ctx, spanName,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithTimestamp(time.Now()),
 	)
-	return trace.ContextWithSpan(newCtx, span), span
 }
 
 type wrappedClientStream struct {

@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"jaeger-middleware/middleware"
 	"jaeger-middleware/test"
 	"jaeger-middleware/test/proto"
@@ -51,7 +52,7 @@ func TestMiddlewareServer(t *testing.T) {
 func TestMiddlewareClient(t *testing.T) {
 	var addr string
 	addr = ":50055"
-	ctx := context.WithValue(context.Background(), "trace-id", "5773f84acdce8e4b95529cc8c2240717")
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("trace-id", "9be77650c070ea2f616f5acde01cba4d"))
 	req1 := &proto.GetReq{
 		Name: "www3",
 	}

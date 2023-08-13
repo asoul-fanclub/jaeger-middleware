@@ -22,6 +22,7 @@ const (
 	DefaultEnvironment   = "develop"
 	DefaultServiceName   = "trace-demo"
 	DefaultTraceIDHeader = "trace-id"
+	CurrentSpanContext   = "current-span-context"
 )
 
 type MetaData struct {

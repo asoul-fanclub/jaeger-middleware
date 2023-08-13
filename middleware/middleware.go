@@ -28,10 +28,10 @@ func NewJaegerServerMiddleware() *JaegerServerMiddleware {
 	return &JaegerServerMiddleware{}
 }
 
-// UnaryInterceptor
-// a service call
+// UnaryInterceptor a service call
 func (jsm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	o := DefaultOptions()
+	var span trace.Span
 
 	// Get DefaultTraceIDHeader from the request header
 	traceID, _ := GetTraceIDFromHeader(ctx)
@@ -39,9 +39,11 @@ func (jsm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req int
 		ctx = context.WithValue(ctx, DefaultTraceIDHeader, traceID.String())
 	}
 
-	newCtx, span := newServerSpan(ctx, o.tracer, info.FullMethod)
+	ctx, span = newServerSpan(ctx, o.tracer, info.FullMethod)
+	defer span.End()
+
 	if !traceID.IsValid() {
-		newCtx = context.WithValue(newCtx, DefaultTraceIDHeader, span.SpanContext().TraceID().String())
+		ctx = context.WithValue(ctx, DefaultTraceIDHeader, span.SpanContext().TraceID().String())
 	}
 	if body, _ := json.Marshal(req); len(body) > 0 {
 		if len(body) > o.maxBodySize {
@@ -51,10 +53,9 @@ func (jsm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req int
 	}
 
 	span.SetAttributes(semconv.NetSockPeerAddrKey.String(Addr(ctx)))
-	resp, err := handler(newCtx, req)
+	resp, err := handler(ctx, req)
 	finishServerSpan(span, err, o.maxBodySize)
 
-	span.End(trace.WithTimestamp(time.Now()))
 	return resp, err
 }
 
@@ -68,6 +69,7 @@ func (jsm *JaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.Se
 	}
 
 	newCtx, span := newServerSpan(ctx, o.tracer, info.FullMethod)
+	defer span.End()
 
 	if !traceID.IsValid() {
 		newCtx = context.WithValue(newCtx, DefaultTraceIDHeader, span.SpanContext().TraceID().String())
@@ -83,7 +85,6 @@ func (jsm *JaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.Se
 	err := handler(srv, wrappedStream)
 	finishServerSpan(span, err, o.maxBodySize)
 
-	span.End(trace.WithTimestamp(time.Now()))
 	return err
 }
 
@@ -162,6 +163,7 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 	var handlerErr error
 
 	newCtx, span := newClientSpan(ctx, o.tracer, method)
+	defer span.End()
 
 	if body, _ := json.Marshal(req); len(body) > 0 {
 		if len(body) > o.maxBodySize {
@@ -177,7 +179,6 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 	handlerErr = invoker(newCtx, method, req, reply, cc, opts...)
 	finishClientSpan(span, handlerErr, o.maxBodySize)
 
-	span.End(trace.WithTimestamp(time.Now()))
 	return handlerErr
 }
 
@@ -185,6 +186,7 @@ func (jcm *JaegerClientMiddleware) StreamClientInterceptor(ctx context.Context, 
 	o := DefaultOptions()
 
 	newCtx, span := newClientSpan(ctx, o.tracer, method)
+	defer span.End()
 
 	if traceIDStr, ok := newCtx.Value(DefaultTraceIDHeader).(string); ok && traceIDStr != "" {
 		md := metadata.Pairs(TraceHeader(), traceIDStr)
@@ -193,7 +195,6 @@ func (jcm *JaegerClientMiddleware) StreamClientInterceptor(ctx context.Context, 
 
 	wrappedStream, err := streamer(newCtx, desc, cc, method, opts...)
 	if err != nil {
-		span.End(trace.WithTimestamp(time.Now()))
 		return nil, err
 	}
 

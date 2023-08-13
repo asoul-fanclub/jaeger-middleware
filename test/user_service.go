@@ -18,7 +18,7 @@ var mockErr = errors.New("mock error")
 func (u *UserService) Get(ctx context.Context, req *proto.GetReq) (*proto.GetResp, error) {
 	fmt.Println("Get~")
 	if req.GetName() == "www" {
-		return nil, mockErr
+		return &proto.GetResp{Name: "www"}, nil
 	}
 	req1 := &proto.GetReq{
 		Name: "www",

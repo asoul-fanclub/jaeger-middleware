@@ -51,7 +51,7 @@ func TestMiddlewareServer(t *testing.T) {
 func TestMiddlewareClient(t *testing.T) {
 	var addr string
 	addr = ":50055"
-	ctx := context.WithValue(context.Background(), "trace-id", "659b48a7f511ec8f26f77402adc6ade1")
+	ctx := context.WithValue(context.Background(), "trace-id", "5773f84acdce8e4b95529cc8c2240717")
 	req1 := &proto.GetReq{
 		Name: "www3",
 	}
@@ -66,10 +66,8 @@ func TestMiddlewareClient(t *testing.T) {
 	defer conn.Close()
 	client := proto.NewTestServiceClient(conn)
 	resp, err := client.Get(ctx, req1)
-	if err != nil {
-		log.Fatal(err)
-	}
-	assert.Equal(t, req1.GetName(), resp.GetName())
+	assert.Nil(t, err)
+	assert.Equal(t, "www", resp.GetName())
 }
 
 func TestTraceID(t *testing.T) {

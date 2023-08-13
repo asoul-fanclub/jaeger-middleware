@@ -41,8 +41,6 @@ func (jsm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req int
 	}
 
 	newCtx, span := newServerSpan(ctx, o.tracer, info.FullMethod)
-	defer span.End(trace.WithTimestamp(time.Now()))
-
 	if !traceID.IsValid() {
 		newCtx = context.WithValue(newCtx, "trace-id", span.SpanContext().TraceID().String())
 	}
@@ -56,11 +54,38 @@ func (jsm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req int
 	span.SetAttributes(semconv.NetSockPeerAddrKey.String(Addr(ctx)))
 	resp, err := handler(newCtx, req)
 	finishServerSpan(span, err, o.maxBodySize)
+
+	span.End(trace.WithTimestamp(time.Now()))
 	return resp, err
 }
 
 func (jsm *JaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	return nil
+	o := DefaultOptions()
+	ctx := ss.Context()
+
+	traceID, _ := GetTraceIDFromHeader(ctx)
+	if traceID.IsValid() {
+		ctx = context.WithValue(ctx, "trace-id", traceID.String())
+	}
+
+	newCtx, span := newServerSpan(ctx, o.tracer, info.FullMethod)
+
+	if !traceID.IsValid() {
+		newCtx = context.WithValue(newCtx, "trace-id", span.SpanContext().TraceID().String())
+	}
+	span.SetAttributes(semconv.NetSockPeerAddrKey.String(Addr(ctx)))
+
+	wrappedStream := &wrappedServerStream{
+		ServerStream: ss,
+		ctx:          newCtx,
+		span:         span,
+	}
+
+	err := handler(srv, wrappedStream)
+	finishServerSpan(span, err, o.maxBodySize)
+
+	span.End(trace.WithTimestamp(time.Now()))
+	return err
 }
 
 func newServerSpan(ctx context.Context, tracer trace.Tracer, spanName string) (context.Context, trace.Span) {
@@ -89,6 +114,24 @@ func finishServerSpan(span trace.Span, err error, bodySize int) {
 	span.SetStatus(codes.Ok, codes.Ok.String())
 }
 
+type wrappedServerStream struct {
+	grpc.ServerStream
+	ctx  context.Context
+	span trace.Span
+}
+
+func (wss *wrappedServerStream) Context() context.Context {
+	return wss.ctx
+}
+
+func (wss *wrappedServerStream) SendMsg(m interface{}) error {
+	return wss.ServerStream.SendMsg(m)
+}
+
+func (wss *wrappedServerStream) RecvMsg(m interface{}) error {
+	return wss.ServerStream.RecvMsg(m)
+}
+
 // ---------------------------- Client ----------------------------
 
 type JaegerClientMiddleware struct{}
@@ -102,7 +145,7 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 	var handlerErr error
 
 	newCtx, span := newClientSpan(ctx, o.tracer, method)
-	defer span.End(trace.WithTimestamp(time.Now()))
+
 	if body, _ := json.Marshal(req); len(body) > 0 {
 		if len(body) > o.maxBodySize {
 			body = []byte(`input body too large`)
@@ -116,6 +159,8 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 	}
 	handlerErr = invoker(newCtx, method, req, reply, cc, opts...)
 	finishClientSpan(span, handlerErr, o.maxBodySize)
+
+	span.End(trace.WithTimestamp(time.Now()))
 	return handlerErr
 }
 

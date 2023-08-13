@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -10,8 +11,9 @@ import (
 )
 
 var (
-	once sync.Once
-	pod  MetaData
+	once          sync.Once
+	pod           MetaData
+	FailToGetMeta = errors.New("failed to get metadata from context")
 )
 
 const (

@@ -5,7 +5,6 @@ import (
 	cRand "crypto/rand"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"math/rand"
 	"sync"
 	"time"
@@ -34,15 +33,15 @@ func NewJaegerServerMiddleware() *JaegerServerMiddleware {
 func (jsm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	o := DefaultOptions()
 
-	// Get "trace-id" from the request header
+	// Get DefaultTraceIDHeader from the request header
 	traceID, _ := GetTraceIDFromHeader(ctx)
 	if traceID.IsValid() {
-		ctx = context.WithValue(ctx, "trace-id", traceID.String())
+		ctx = context.WithValue(ctx, DefaultTraceIDHeader, traceID.String())
 	}
 
 	newCtx, span := newServerSpan(ctx, o.tracer, info.FullMethod)
 	if !traceID.IsValid() {
-		newCtx = context.WithValue(newCtx, "trace-id", span.SpanContext().TraceID().String())
+		newCtx = context.WithValue(newCtx, DefaultTraceIDHeader, span.SpanContext().TraceID().String())
 	}
 	if body, _ := json.Marshal(req); len(body) > 0 {
 		if len(body) > o.maxBodySize {
@@ -65,13 +64,13 @@ func (jsm *JaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.Se
 
 	traceID, _ := GetTraceIDFromHeader(ctx)
 	if traceID.IsValid() {
-		ctx = context.WithValue(ctx, "trace-id", traceID.String())
+		ctx = context.WithValue(ctx, DefaultTraceIDHeader, traceID.String())
 	}
 
 	newCtx, span := newServerSpan(ctx, o.tracer, info.FullMethod)
 
 	if !traceID.IsValid() {
-		newCtx = context.WithValue(newCtx, "trace-id", span.SpanContext().TraceID().String())
+		newCtx = context.WithValue(newCtx, DefaultTraceIDHeader, span.SpanContext().TraceID().String())
 	}
 	span.SetAttributes(semconv.NetSockPeerAddrKey.String(Addr(ctx)))
 
@@ -114,6 +113,24 @@ func finishServerSpan(span trace.Span, err error, bodySize int) {
 	span.SetStatus(codes.Ok, codes.Ok.String())
 }
 
+// GetTraceIDFromHeader tries to extract the trace ID from the request header.
+func GetTraceIDFromHeader(ctx context.Context) (trace.TraceID, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return trace.TraceID{}, FailToGetMeta
+	}
+	traceIDs := md.Get(DefaultTraceIDHeader)
+	if len(traceIDs) > 0 {
+		traceIDStr := traceIDs[0]
+		traceID, err := trace.TraceIDFromHex(traceIDStr)
+		if err != nil {
+			return trace.TraceID{}, err
+		}
+		return traceID, nil
+	}
+	return trace.TraceID{}, nil
+}
+
 type wrappedServerStream struct {
 	grpc.ServerStream
 	ctx  context.Context
@@ -153,7 +170,7 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 		span.SetAttributes(attribute.String(inputKey, string(body)))
 	}
 
-	if traceIDStr, ok := newCtx.Value("trace-id").(string); ok && traceIDStr != "" {
+	if traceIDStr, ok := newCtx.Value(DefaultTraceIDHeader).(string); ok && traceIDStr != "" {
 		md := metadata.Pairs(TraceHeader(), traceIDStr)
 		newCtx = metadata.NewOutgoingContext(newCtx, md)
 	}
@@ -165,7 +182,26 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 }
 
 func (jcm *JaegerClientMiddleware) StreamClientInterceptor(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return nil, nil
+	o := DefaultOptions()
+
+	newCtx, span := newClientSpan(ctx, o.tracer, method)
+
+	if traceIDStr, ok := newCtx.Value(DefaultTraceIDHeader).(string); ok && traceIDStr != "" {
+		md := metadata.Pairs(TraceHeader(), traceIDStr)
+		newCtx = metadata.NewOutgoingContext(newCtx, md)
+	}
+
+	wrappedStream, err := streamer(newCtx, desc, cc, method, opts...)
+	if err != nil {
+		span.End(trace.WithTimestamp(time.Now()))
+		return nil, err
+	}
+
+	return &wrappedClientStream{
+		ClientStream: wrappedStream,
+		ctx:          newCtx,
+		span:         span,
+	}, nil
 }
 
 func finishClientSpan(span trace.Span, err error, bodySize int) {
@@ -194,22 +230,30 @@ func newClientSpan(ctx context.Context, tracer trace.Tracer, spanName string) (c
 	return trace.ContextWithSpan(newCtx, span), span
 }
 
-// GetTraceIDFromHeader tries to extract the trace ID from the request header.
-func GetTraceIDFromHeader(ctx context.Context) (trace.TraceID, error) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return trace.TraceID{}, errors.New("failed to get metadata from context")
+type wrappedClientStream struct {
+	grpc.ClientStream
+	ctx  context.Context
+	span trace.Span
+}
+
+func (wcs *wrappedClientStream) Context() context.Context {
+	return wcs.ctx
+}
+
+func (wcs *wrappedClientStream) SendMsg(m interface{}) error {
+	err := wcs.ClientStream.SendMsg(m)
+	if err != nil {
+		wcs.span.RecordError(err, trace.WithTimestamp(time.Now()))
 	}
-	traceIDs := md.Get("trace-id")
-	if len(traceIDs) > 0 {
-		traceIDStr := traceIDs[0]
-		traceID, err := trace.TraceIDFromHex(traceIDStr)
-		if err != nil {
-			return trace.TraceID{}, err
-		}
-		return traceID, nil
+	return err
+}
+
+func (wcs *wrappedClientStream) RecvMsg(m interface{}) error {
+	err := wcs.ClientStream.RecvMsg(m)
+	if err != nil {
+		wcs.span.RecordError(err, trace.WithTimestamp(time.Now()))
 	}
-	return trace.TraceID{}, nil
+	return err
 }
 
 // ---------------------------- IDGenerator ----------------------------
@@ -225,11 +269,10 @@ func (gen *JaegerIDGenerator) NewIDs(ctx context.Context) (trace.TraceID, trace.
 	if gen.randSource == nil {
 		gen.defaultIDGenerator()
 	}
-	if ctx.Value("trace-id") != "" {
-		str, ok := ctx.Value("trace-id").(string)
+	if ctx.Value(DefaultTraceIDHeader) != "" {
+		str, ok := ctx.Value(DefaultTraceIDHeader).(string)
 		if !ok {
 			t, s := gen.newRandIDs()
-			ctx = context.WithValue(ctx, "trace-id", t.String())
 			return t, s
 		}
 		t, _ := trace.TraceIDFromHex(str)

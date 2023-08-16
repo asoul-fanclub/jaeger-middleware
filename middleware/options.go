@@ -27,11 +27,8 @@ const (
 )
 
 var (
-	metaOnce   sync.Once
-	meta       MetaData
-	optionOnce sync.Once
-	o          Options
-
+	optionOnce    sync.Once
+	o             Options
 	FailToGetMeta = errors.New("failed to get metadata from context")
 )
 
@@ -45,12 +42,40 @@ type Options struct {
 	meta          MetaData
 }
 
-// DefaultOptions
-// 优先级：自主设置->环境变量->默认设置
-func DefaultOptions() Options {
+func init() {
 	optionOnce.Do(func() {
 		o = Options{}
-		o.meta = GetMetaData()
+		o.meta = MetaData{
+			ClusterName: DefaultCluster,
+			Namespace:   DefaultNameSpace,
+			Deployment:  DefaultDeployment,
+			HostName:    DefaultHostName,
+			PodName:     DefaultPodName,
+			ServiceName: DefaultServiceName,
+			Environment: DefaultEnvironment,
+			TraceHeader: DefaultTraceIDHeader,
+			InputHeader: DefaultInputHeader,
+		}
+		if os.Getenv("JM_CLUSTER_NAME") != "" {
+			o.meta.ClusterName = os.Getenv("JM_CLUSTER_NAME")
+		}
+		if os.Getenv("JM_NAMESPACE") != "" {
+			o.meta.Namespace = os.Getenv("JM_NAMESPACE")
+		}
+		if os.Getenv("JM_DEPLOYMENT") != "" {
+			o.meta.Deployment = os.Getenv("JM_DEPLOYMENT")
+		}
+		if hostname, err := os.Hostname(); err == nil {
+			o.meta.HostName = strings.TrimSpace(hostname)
+			o.meta.PodName = strings.TrimSpace(hostname)
+		}
+		if os.Getenv("JM_SERVICE_NAME") != "" {
+			o.meta.ServiceName = os.Getenv("JM_SERVICE_NAME")
+		}
+		if os.Getenv("JM_ENVIRONMENT") != "" {
+			o.meta.Environment = os.Getenv("JM_ENVIRONMENT")
+		}
+
 		o.maxBodySize = 10240
 		o.serverEnabled = true
 		o.clientEnabled = true
@@ -67,6 +92,11 @@ func DefaultOptions() Options {
 			o.clientEnabled = false
 		}
 	})
+}
+
+// DefaultOptions
+// 优先级：自主设置->环境变量->默认设置
+func DefaultOptions() Options {
 	return o
 }
 
@@ -80,42 +110,6 @@ type MetaData struct {
 	Environment string `json:"environment"`
 	TraceHeader string `json:"trace_header"`
 	InputHeader string `json:"input_header"`
-}
-
-func GetMetaData() MetaData {
-	metaOnce.Do(func() {
-		meta = MetaData{
-			ClusterName: DefaultCluster,
-			Namespace:   DefaultNameSpace,
-			Deployment:  DefaultDeployment,
-			HostName:    DefaultHostName,
-			PodName:     DefaultPodName,
-			ServiceName: DefaultServiceName,
-			Environment: DefaultEnvironment,
-			TraceHeader: DefaultTraceIDHeader,
-			InputHeader: DefaultInputHeader,
-		}
-		if os.Getenv("JM_CLUSTER_NAME") != "" {
-			meta.ClusterName = os.Getenv("JM_CLUSTER_NAME")
-		}
-		if os.Getenv("JM_NAMESPACE") != "" {
-			meta.Namespace = os.Getenv("JM_NAMESPACE")
-		}
-		if os.Getenv("JM_DEPLOYMENT") != "" {
-			meta.Deployment = os.Getenv("JM_DEPLOYMENT")
-		}
-		if hostname, err := os.Hostname(); err == nil {
-			meta.HostName = strings.TrimSpace(hostname)
-			meta.PodName = strings.TrimSpace(hostname)
-		}
-		if os.Getenv("JM_SERVICE_NAME") != "" {
-			meta.ServiceName = os.Getenv("JM_SERVICE_NAME")
-		}
-		if os.Getenv("JM_ENVIRONMENT") != "" {
-			meta.Environment = os.Getenv("JM_ENVIRONMENT")
-		}
-	})
-	return meta
 }
 
 func Addr(ctx context.Context) (addr string) {

@@ -2,7 +2,8 @@ package middleware
 
 import (
 	"context"
-	"errors"
+	"go.opentelemetry.io/otel/propagation"
+	"google.golang.org/grpc/metadata"
 	"os"
 	"strconv"
 	"strings"
@@ -13,22 +14,21 @@ import (
 )
 
 const (
-	DefaultInputHeader   = "input_param"
-	DefaultEnvironment   = "develop"
-	DefaultServiceName   = "default_service_name"
-	DefaultCluster       = "default_cluster"
-	DefaultNameSpace     = "default_namespace"
-	DefaultDeployment    = "default_deployment"
-	DefaultHostName      = "default_hostname"
-	DefaultPodName       = "default_pod"
-	DefaultTraceIDHeader = "trace-id"
+	defaultInputHeader   = "input_param"
+	defaultEnvironment   = "develop"
+	defaultServiceName   = "default_service_name"
+	defaultCluster       = "default_cluster"
+	defaultNameSpace     = "default_namespace"
+	defaultDeployment    = "default_deployment"
+	defaultHostName      = "default_hostname"
+	defaultPodName       = "default_pod"
+	defaultTraceIDHeader = "trace-id"
 	CurrentSpanContext   = "current-span-context"
 )
 
 var (
-	optionOnce    sync.Once
-	o             Options
-	FailToGetMeta = errors.New("failed to get metadata from context")
+	optionOnce sync.Once
+	o          Options
 )
 
 type JaegerMiddleOptionFunc func(*Options)
@@ -47,49 +47,49 @@ func DefaultOptions() Options {
 	optionOnce.Do(func() {
 		o = Options{}
 		o.meta = MetaData{
-			ClusterName: DefaultCluster,
-			Namespace:   DefaultNameSpace,
-			Deployment:  DefaultDeployment,
-			HostName:    DefaultHostName,
-			PodName:     DefaultPodName,
-			ServiceName: DefaultServiceName,
-			Environment: DefaultEnvironment,
-			TraceHeader: DefaultTraceIDHeader,
-			InputHeader: DefaultInputHeader,
+			ClusterName: defaultCluster,
+			Namespace:   defaultNameSpace,
+			Deployment:  defaultDeployment,
+			HostName:    defaultHostName,
+			PodName:     defaultPodName,
+			ServiceName: defaultServiceName,
+			Environment: defaultEnvironment,
+			TraceHeader: defaultTraceIDHeader,
+			InputHeader: defaultInputHeader,
 		}
-		if os.Getenv("JM_CLUSTER_NAME") != "" {
-			o.meta.ClusterName = os.Getenv("JM_CLUSTER_NAME")
+		if os.Getenv("CLUSTER_NAME") != "" {
+			o.meta.ClusterName = os.Getenv("CLUSTER_NAME")
 		}
-		if os.Getenv("JM_NAMESPACE") != "" {
-			o.meta.Namespace = os.Getenv("JM_NAMESPACE")
+		if os.Getenv("NAMESPACE") != "" {
+			o.meta.Namespace = os.Getenv("NAMESPACE")
 		}
-		if os.Getenv("JM_DEPLOYMENT") != "" {
-			o.meta.Deployment = os.Getenv("JM_DEPLOYMENT")
+		if os.Getenv("DEPLOYMENT") != "" {
+			o.meta.Deployment = os.Getenv("DEPLOYMENT")
 		}
 		if hostname, err := os.Hostname(); err == nil {
 			o.meta.HostName = strings.TrimSpace(hostname)
 			o.meta.PodName = strings.TrimSpace(hostname)
 		}
-		if os.Getenv("JM_SERVICE_NAME") != "" {
-			o.meta.ServiceName = os.Getenv("JM_SERVICE_NAME")
+		if os.Getenv("SERVICE_NAME") != "" {
+			o.meta.ServiceName = os.Getenv("SERVICE_NAME")
 		}
-		if os.Getenv("JM_ENVIRONMENT") != "" {
-			o.meta.Environment = os.Getenv("JM_ENVIRONMENT")
+		if os.Getenv("ENVIRONMENT") != "" {
+			o.meta.Environment = os.Getenv("ENVIRONMENT")
 		}
 
 		o.maxBodySize = 10240
 		o.serverEnabled = true
 		o.clientEnabled = true
-		if maxBoxSizeStr := os.Getenv("JM_MAX_BOX_SIZE"); len(maxBoxSizeStr) > 0 {
+		if maxBoxSizeStr := os.Getenv("MAX_BOX_SIZE"); len(maxBoxSizeStr) > 0 {
 			maxBodySize, err := strconv.Atoi(maxBoxSizeStr)
 			if err == nil {
 				o.maxBodySize = maxBodySize
 			}
 		}
-		if serverEnabled := os.Getenv("JM_SERVER_ENABLED"); strings.ToUpper(strings.TrimSpace(serverEnabled)) == "FALSE" {
+		if serverEnabled := os.Getenv("SERVER_ENABLED"); strings.ToUpper(strings.TrimSpace(serverEnabled)) == "FALSE" {
 			o.serverEnabled = false
 		}
-		if clientEnabled := os.Getenv("JM_CLIENT_ENABLED"); strings.ToUpper(strings.TrimSpace(clientEnabled)) == "FALSE" {
+		if clientEnabled := os.Getenv("CLIENT_ENABLED"); strings.ToUpper(strings.TrimSpace(clientEnabled)) == "FALSE" {
 			o.clientEnabled = false
 		}
 	})
@@ -114,4 +114,71 @@ func Addr(ctx context.Context) (addr string) {
 		return p.Addr.String()
 	}
 	return "unknown peer addr"
+}
+
+type metadataSupplier struct {
+	metadata *metadata.MD
+}
+
+// assert that metadataSupplier implements the TextMapCarrier interface.
+var _ propagation.TextMapCarrier = &metadataSupplier{}
+
+func (s *metadataSupplier) Get(key string) string {
+	values := s.metadata.Get(key)
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func (s *metadataSupplier) Set(key string, value string) {
+	s.metadata.Set(key, value)
+}
+
+func (s *metadataSupplier) Keys() []string {
+	out := make([]string, 0, len(*s.metadata))
+	for key := range *s.metadata {
+		out = append(out, key)
+	}
+	return out
+}
+
+func inject(ctx context.Context, propagators propagation.TextMapPropagator) context.Context {
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		md = metadata.MD{}
+	}
+	propagators.Inject(ctx, &metadataSupplier{
+		metadata: &md,
+	})
+	return metadata.NewOutgoingContext(ctx, md)
+}
+
+func extract(ctx context.Context) context.Context {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ctx
+	}
+	res := trace.SpanContextConfig{}
+
+	o := DefaultOptions()
+	var err error
+	traceIDs := md.Get(o.meta.TraceHeader)
+	curSpanContext := md.Get(CurrentSpanContext)
+	if len(traceIDs) > 0 {
+		traceIDStr := traceIDs[0]
+		res.TraceID, err = trace.TraceIDFromHex(traceIDStr)
+		if err != nil {
+			return ctx
+		}
+		if len(curSpanContext) > 0 {
+			spanID, err := trace.SpanIDFromHex(curSpanContext[0])
+			if err != nil {
+				return ctx
+			}
+			res.SpanID = spanID
+		}
+		return trace.ContextWithRemoteSpanContext(ctx, trace.NewSpanContext(res))
+	}
+	return ctx
 }

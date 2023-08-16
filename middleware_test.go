@@ -12,7 +12,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 	"jaeger-middleware/middleware"
 	"jaeger-middleware/test"
 	"jaeger-middleware/test/proto"
@@ -50,9 +49,11 @@ func TestMiddlewareServer(t *testing.T) {
 }
 
 func TestMiddlewareClient(t *testing.T) {
+	tp, _ := middleware.TracerProvider("http://localhost:14268/api/traces", false)
+	otel.SetTracerProvider(tp)
 	var addr string
 	addr = ":50055"
-	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("trace-id", "9be77650c070ea2f616f5acde01cba4d"))
+	ctx := context.WithValue(context.Background(), "trace-id", "d85f4f0679d12a67f1e980ac2a52a1b4")
 	req1 := &proto.GetReq{
 		Name: "www3",
 	}

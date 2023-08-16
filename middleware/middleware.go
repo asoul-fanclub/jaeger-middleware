@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/jaeger"
@@ -31,48 +32,57 @@ func NewJaegerServerMiddleware() *JaegerServerMiddleware {
 // UnaryInterceptor a service call
 func (jsm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	o := DefaultOptions()
-	var span trace.Span
+	tracer := otel.Tracer(o.meta.ServiceName)
+	if !o.serverEnabled {
+		return handler(ctx, req)
+	}
 
+	var span trace.Span
 	// Get DefaultTraceIDHeader from the request header
 	traceID, ctx, _ := GetTraceIDFromHeader(ctx)
 	if traceID.IsValid() {
-		ctx = context.WithValue(ctx, DefaultTraceIDHeader, traceID.String())
+		ctx = context.WithValue(ctx, o.meta.TraceHeader, traceID.String())
 	}
 
-	ctx, span = newServerSpan(ctx, o.tracer, info.FullMethod)
+	ctx, span = newServerSpan(ctx, tracer, info.FullMethod)
 	defer span.End()
 
 	if !traceID.IsValid() {
-		ctx = context.WithValue(ctx, DefaultTraceIDHeader, span.SpanContext().TraceID().String())
+		ctx = context.WithValue(ctx, o.meta.TraceHeader, span.SpanContext().TraceID().String())
 	}
 	if body, _ := json.Marshal(req); len(body) > 0 {
 		if len(body) > o.maxBodySize {
 			body = []byte(`input body too large`)
 		}
-		span.SetAttributes(attribute.String(inputKey, string(body)))
+		span.SetAttributes(attribute.String(o.meta.InputHeader, string(body)))
 	}
-
 	span.SetAttributes(semconv.NetSockPeerAddrKey.String(Addr(ctx)))
 	resp, err := handler(ctx, req)
 	finishServerSpan(span, err, o.maxBodySize)
-
 	return resp, err
 }
 
 func (jsm *JaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	o := DefaultOptions()
+	tracer := otel.Tracer(o.meta.ServiceName)
 	ctx := ss.Context()
+	if !o.serverEnabled {
+		return handler(srv, &wrappedServerStream{
+			ServerStream: ss,
+			ctx:          ctx,
+		})
+	}
 
 	traceID, ctx, _ := GetTraceIDFromHeader(ctx)
 	if traceID.IsValid() {
-		ctx = context.WithValue(ctx, DefaultTraceIDHeader, traceID.String())
+		ctx = context.WithValue(ctx, o.meta.TraceHeader, traceID.String())
 	}
 
-	newCtx, span := newServerSpan(ctx, o.tracer, info.FullMethod)
+	newCtx, span := newServerSpan(ctx, tracer, info.FullMethod)
 	defer span.End()
 
 	if !traceID.IsValid() {
-		newCtx = context.WithValue(newCtx, DefaultTraceIDHeader, span.SpanContext().TraceID().String())
+		newCtx = context.WithValue(newCtx, o.meta.TraceHeader, span.SpanContext().TraceID().String())
 	}
 	span.SetAttributes(semconv.NetSockPeerAddrKey.String(Addr(ctx)))
 
@@ -119,7 +129,9 @@ func GetTraceIDFromHeader(ctx context.Context) (trace.TraceID, context.Context, 
 	if !ok {
 		return trace.TraceID{}, ctx, FailToGetMeta
 	}
-	traceIDs := md.Get(DefaultTraceIDHeader)
+
+	o := DefaultOptions()
+	traceIDs := md.Get(o.meta.TraceHeader)
 	curSpanContext := md.Get(CurrentSpanContext)
 	if len(traceIDs) > 0 {
 		traceIDStr := traceIDs[0]
@@ -169,20 +181,24 @@ func NewJaegerClientMiddleware() *JaegerClientMiddleware {
 
 func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 	o := DefaultOptions()
-	var handlerErr error
+	if !o.clientEnabled {
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
 
-	ctx, span := newClientSpan(ctx, o.tracer, method)
+	var handlerErr error
+	tracer := otel.Tracer(o.meta.ServiceName)
+	ctx, span := newClientSpan(ctx, tracer, method)
 	defer span.End()
 
 	if body, _ := json.Marshal(req); len(body) > 0 {
 		if len(body) > o.maxBodySize {
 			body = []byte(`input body too large`)
 		}
-		span.SetAttributes(attribute.String(inputKey, string(body)))
+		span.SetAttributes(attribute.String(o.meta.InputHeader, string(body)))
 	}
 
-	if traceIDStr, ok := ctx.Value(DefaultTraceIDHeader).(string); ok && traceIDStr != "" {
-		md := metadata.Pairs(TraceHeader(), traceIDStr)
+	if traceIDStr, ok := ctx.Value(o.meta.TraceHeader).(string); ok && traceIDStr != "" {
+		md := metadata.Pairs(o.meta.TraceHeader, traceIDStr)
 		md.Append(CurrentSpanContext, trace.SpanFromContext(ctx).SpanContext().SpanID().String())
 		ctx = metadata.NewOutgoingContext(ctx, md)
 	}
@@ -194,12 +210,24 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 
 func (jcm *JaegerClientMiddleware) StreamClientInterceptor(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	o := DefaultOptions()
+	if !o.clientEnabled {
+		wrappedStream, err := streamer(ctx, desc, cc, method, opts...)
+		if err != nil {
+			return nil, err
+		}
 
-	newCtx, span := newClientSpan(ctx, o.tracer, method)
+		return &wrappedClientStream{
+			ClientStream: wrappedStream,
+			ctx:          ctx,
+		}, nil
+	}
+
+	tracer := otel.Tracer(o.meta.ServiceName)
+	newCtx, span := newClientSpan(ctx, tracer, method)
 	defer span.End()
 
 	if traceIDStr, ok := newCtx.Value(DefaultTraceIDHeader).(string); ok && traceIDStr != "" {
-		md := metadata.Pairs(TraceHeader(), traceIDStr)
+		md := metadata.Pairs(o.meta.TraceHeader, traceIDStr)
 		newCtx = metadata.NewOutgoingContext(newCtx, md)
 	}
 
@@ -252,7 +280,7 @@ func (wcs *wrappedClientStream) Context() context.Context {
 
 func (wcs *wrappedClientStream) SendMsg(m interface{}) error {
 	err := wcs.ClientStream.SendMsg(m)
-	if err != nil {
+	if err != nil && wcs.span != nil {
 		wcs.span.RecordError(err, trace.WithTimestamp(time.Now()))
 	}
 	return err
@@ -260,7 +288,7 @@ func (wcs *wrappedClientStream) SendMsg(m interface{}) error {
 
 func (wcs *wrappedClientStream) RecvMsg(m interface{}) error {
 	err := wcs.ClientStream.RecvMsg(m)
-	if err != nil {
+	if err != nil && wcs.span != nil {
 		wcs.span.RecordError(err, trace.WithTimestamp(time.Now()))
 	}
 	return err
@@ -338,11 +366,11 @@ func (gen *JaegerIDGenerator) defaultIDGenerator() {
 // about the application.
 func TracerProvider(url string, withK8SSource bool) (*traceSdk.TracerProvider, error) {
 	exp, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(url)))
+	o := DefaultOptions()
 	if err != nil {
 		return nil, err
 	}
 	var tp *traceSdk.TracerProvider
-	meta := GetMetaData()
 	if withK8SSource {
 		tp = traceSdk.NewTracerProvider(
 			// Always be sure to batch in production.
@@ -351,13 +379,13 @@ func TracerProvider(url string, withK8SSource bool) (*traceSdk.TracerProvider, e
 			// Record information about this application in a Resource.
 			traceSdk.WithResource(resource.NewWithAttributes(
 				semconv.SchemaURL,
-				semconv.K8SPodName(meta.PodName),
-				semconv.K8SClusterName(meta.ClusterName),
-				semconv.K8SDeploymentName(meta.Deployment),
-				semconv.K8SNamespaceName(meta.Namespace),
-				semconv.HostName(meta.HostName),
-				semconv.ServiceName(SName()),
-				semconv.DeploymentEnvironment(Env()),
+				semconv.K8SPodName(o.meta.PodName),
+				semconv.K8SClusterName(o.meta.ClusterName),
+				semconv.K8SDeploymentName(o.meta.Deployment),
+				semconv.K8SNamespaceName(o.meta.Namespace),
+				semconv.HostName(o.meta.HostName),
+				semconv.ServiceName(o.meta.ServiceName),
+				semconv.DeploymentEnvironment(o.meta.Environment),
 			)),
 		)
 	} else {
@@ -366,9 +394,9 @@ func TracerProvider(url string, withK8SSource bool) (*traceSdk.TracerProvider, e
 			traceSdk.WithIDGenerator(&JaegerIDGenerator{}),
 			traceSdk.WithResource(resource.NewWithAttributes(
 				semconv.SchemaURL,
-				semconv.HostName(meta.HostName),
-				semconv.ServiceName(SName()),
-				semconv.DeploymentEnvironment(Env()),
+				semconv.HostName(o.meta.HostName),
+				semconv.ServiceName(o.meta.ServiceName),
+				semconv.DeploymentEnvironment(o.meta.Environment),
 			)),
 		)
 	}

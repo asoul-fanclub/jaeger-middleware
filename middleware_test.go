@@ -54,7 +54,7 @@ func TestMiddlewareClient(t *testing.T) {
 	var addr string
 	addr = ":50055"
 	ctx := context.WithValue(context.Background(), "trace-id", "cdde169b504ec847521a2cf1d1ffa9f9")
-	req1 := &proto.GetReq{
+	req := &proto.GetReq{
 		Name: "www3",
 	}
 	conn, err := grpc.Dial(addr,
@@ -67,7 +67,7 @@ func TestMiddlewareClient(t *testing.T) {
 	}
 	defer conn.Close()
 	client := proto.NewTestServiceClient(conn)
-	resp, err := client.Get(ctx, req1)
+	resp, err := client.Get(ctx, req)
 	assert.Nil(t, err)
 	assert.Equal(t, "www", resp.GetName())
 }

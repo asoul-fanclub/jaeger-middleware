@@ -76,6 +76,9 @@ func DefaultOptions() Options {
 		if os.Getenv("ENVIRONMENT") != "" {
 			o.meta.Environment = os.Getenv("ENVIRONMENT")
 		}
+		if os.Getenv("TRACE_HEADER") != "" {
+			o.meta.Environment = os.Getenv("TRACE_HEADER")
+		}
 
 		o.maxBodySize = 10240
 		o.serverEnabled = true

@@ -166,8 +166,7 @@ func extract(ctx context.Context) context.Context {
 	traceIDs := md.Get(o.meta.TraceHeader)
 	curSpanContext := md.Get(CurrentSpanContext)
 	if len(traceIDs) > 0 {
-		traceIDStr := traceIDs[0]
-		res.TraceID, err = trace.TraceIDFromHex(traceIDStr)
+		res.TraceID, err = trace.TraceIDFromHex(traceIDs[0])
 		if err != nil {
 			return ctx
 		}

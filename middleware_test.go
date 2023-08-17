@@ -53,7 +53,7 @@ func TestMiddlewareClient(t *testing.T) {
 	otel.SetTracerProvider(tp)
 	var addr string
 	addr = ":50055"
-	ctx := context.WithValue(context.Background(), "trace-id", "d85f4f0679d12a67f1e980ac2a52a1b4")
+	ctx := context.WithValue(context.Background(), "trace-id", "cdde169b504ec847521a2cf1d1ffa9f9")
 	req1 := &proto.GetReq{
 		Name: "www3",
 	}

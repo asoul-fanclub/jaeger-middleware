@@ -37,17 +37,9 @@ func (jsm *JaegerServerMiddleware) UnaryInterceptor(ctx context.Context, req int
 		return handler(ctx, req)
 	}
 	ctx = extract(ctx)
-	var span trace.Span
-	// Get DefaultTraceIDHeader from the request header
-	if trace.SpanContextFromContext(ctx).IsValid() {
-		ctx = context.WithValue(ctx, o.meta.TraceHeader, trace.SpanContextFromContext(ctx).TraceID().String())
-	}
-	ctx, span = newServerSpan(ctx, tracer, info.FullMethod)
+	ctx, span := newServerSpan(ctx, tracer, info.FullMethod)
 	defer span.End()
 
-	if !trace.SpanContextFromContext(ctx).TraceID().IsValid() {
-		ctx = context.WithValue(ctx, o.meta.TraceHeader, span.SpanContext().TraceID().String())
-	}
 	if body, _ := json.Marshal(req); len(body) > 0 {
 		if len(body) > o.maxBodySize {
 			body = []byte(`input body too large`)
@@ -66,7 +58,7 @@ func (jsm *JaegerServerMiddleware) StreamInterceptor(srv interface{}, ss grpc.Se
 
 func newServerSpan(ctx context.Context, tracer trace.Tracer, spanName string) (context.Context, trace.Span) {
 	return tracer.Start(
-		trace.ContextWithRemoteSpanContext(ctx, trace.SpanContextFromContext(ctx)), spanName,
+		ctx, spanName,
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithTimestamp(time.Now()),
 	)
@@ -133,11 +125,14 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 		span.SetAttributes(attribute.String(o.meta.InputHeader, string(body)))
 	}
 
-	if traceIDStr, ok := ctx.Value(o.meta.TraceHeader).(string); ok && traceIDStr != "" {
-		md := metadata.Pairs(o.meta.TraceHeader, traceIDStr)
-		md.Append(CurrentSpanContext, trace.SpanFromContext(ctx).SpanContext().SpanID().String())
-		ctx = metadata.NewOutgoingContext(ctx, md)
+	// IDGenerate时优先从context获取
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		md = metadata.MD{}
 	}
+	md.Append(o.meta.TraceHeader, trace.SpanFromContext(ctx).SpanContext().TraceID().String())
+	md.Append(CurrentSpanContext, trace.SpanFromContext(ctx).SpanContext().SpanID().String())
+	ctx = metadata.NewOutgoingContext(ctx, md)
 	handlerErr = invoker(ctx, method, req, reply, cc, opts...)
 	finishClientSpan(span, handlerErr, o.maxBodySize)
 
@@ -282,6 +277,7 @@ func TracerProvider(url string, withK8SSource bool) (*traceSdk.TracerProvider, e
 			// Always be sure to batch in production.
 			traceSdk.WithBatcher(exp),
 			traceSdk.WithIDGenerator(&JaegerIDGenerator{}),
+			traceSdk.WithSampler(traceSdk.AlwaysSample()),
 			// Record information about this application in a Resource.
 			traceSdk.WithResource(resource.NewWithAttributes(
 				semconv.SchemaURL,
@@ -297,6 +293,7 @@ func TracerProvider(url string, withK8SSource bool) (*traceSdk.TracerProvider, e
 	} else {
 		tp = traceSdk.NewTracerProvider(
 			traceSdk.WithBatcher(exp),
+			traceSdk.WithSampler(traceSdk.AlwaysSample()),
 			traceSdk.WithIDGenerator(&JaegerIDGenerator{}),
 			traceSdk.WithResource(resource.NewWithAttributes(
 				semconv.SchemaURL,

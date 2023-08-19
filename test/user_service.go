@@ -2,18 +2,15 @@ package test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
+	"github.com/asoul-fanclub/jaeger-middleware/middleware"
+	"github.com/asoul-fanclub/jaeger-middleware/test/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"jaeger-middleware/middleware"
-	"jaeger-middleware/test/proto"
 )
 
 type UserService struct{}
-
-var mockErr = errors.New("mock error")
 
 func (u *UserService) Get(ctx context.Context, req *proto.GetReq) (*proto.GetResp, error) {
 	fmt.Println("Get~")

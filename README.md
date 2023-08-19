@@ -7,7 +7,7 @@ An extensively configurable Go web middleware that integrates Jaeger for distrib
 ### Installation
 
 ```bash
-go get github.com/asoul-fanclub/jaeger-middleware@v0.0.4
+go get github.com/asoul-fanclub/jaeger-middleware@v0.0.5
 ```
 
 ### Example

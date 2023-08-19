@@ -1,4 +1,4 @@
-module jaeger-middleware
+module github.com/asoul-fanclub/jaeger-middleware
 
 go 1.20
 

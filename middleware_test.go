@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/asoul-fanclub/jaeger-middleware/middleware"
+	"github.com/asoul-fanclub/jaeger-middleware/test"
+	"github.com/asoul-fanclub/jaeger-middleware/test/proto"
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"jaeger-middleware/middleware"
-	"jaeger-middleware/test"
-	"jaeger-middleware/test/proto"
 )
 
 func TestMiddlewareServer(t *testing.T) {

@@ -209,15 +209,21 @@ func (gen *JaegerIDGenerator) NewIDs(ctx context.Context) (trace.TraceID, trace.
 		gen.defaultIDGenerator()
 	}
 	if ctx.Value(o.meta.TraceHeader) != "" {
-		str, ok := ctx.Value(o.meta.TraceHeader).(string)
-		if !ok {
-			t, s := gen.newRandIDs()
-			return t, s
+		if str, ok := ctx.Value(o.meta.TraceHeader).(string); ok {
+			t, _ := trace.TraceIDFromHex(str)
+			return t, gen.newRandSpanID()
 		}
-		t, _ := trace.TraceIDFromHex(str)
-		return t, gen.newRandSpanID()
 	}
-
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		traceIDs := md.Get(o.meta.TraceHeader)
+		if len(traceIDs) > 0 {
+			t, err := trace.TraceIDFromHex(traceIDs[0])
+			if err != nil {
+				return gen.newRandIDs()
+			}
+			return t, gen.newRandSpanID()
+		}
+	}
 	return gen.newRandIDs()
 }
 

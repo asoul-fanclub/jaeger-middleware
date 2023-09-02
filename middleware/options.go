@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"context"
-	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc/metadata"
 	"os"
 	"strconv"
@@ -25,6 +24,10 @@ const (
 	defaultTraceIDHeader = "trace-id"
 	CurrentSpanContext   = "current-span-context"
 )
+
+type traceIdType int
+
+const currentTrace traceIdType = iota
 
 var (
 	optionOnce sync.Once
@@ -77,7 +80,7 @@ func DefaultOptions() Options {
 			o.meta.Environment = os.Getenv("ENVIRONMENT")
 		}
 		if os.Getenv("TRACE_HEADER") != "" {
-			o.meta.Environment = os.Getenv("TRACE_HEADER")
+			o.meta.TraceHeader = os.Getenv("TRACE_HEADER")
 		}
 
 		o.maxBodySize = 10240
@@ -119,41 +122,13 @@ func Addr(ctx context.Context) (addr string) {
 	return "unknown peer addr"
 }
 
-type metadataSupplier struct {
-	metadata *metadata.MD
-}
-
-// assert that metadataSupplier implements the TextMapCarrier interface.
-var _ propagation.TextMapCarrier = &metadataSupplier{}
-
-func (s *metadataSupplier) Get(key string) string {
-	values := s.metadata.Get(key)
-	if len(values) == 0 {
-		return ""
-	}
-	return values[0]
-}
-
-func (s *metadataSupplier) Set(key string, value string) {
-	s.metadata.Set(key, value)
-}
-
-func (s *metadataSupplier) Keys() []string {
-	out := make([]string, 0, len(*s.metadata))
-	for key := range *s.metadata {
-		out = append(out, key)
-	}
-	return out
-}
-
-func inject(ctx context.Context, propagators propagation.TextMapPropagator) context.Context {
+func inject(ctx context.Context) context.Context {
 	md, ok := metadata.FromOutgoingContext(ctx)
 	if !ok {
 		md = metadata.MD{}
 	}
-	propagators.Inject(ctx, &metadataSupplier{
-		metadata: &md,
-	})
+	md.Append(o.meta.TraceHeader, trace.SpanFromContext(ctx).SpanContext().TraceID().String())
+	md.Append(CurrentSpanContext, trace.SpanFromContext(ctx).SpanContext().SpanID().String())
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
@@ -183,4 +158,8 @@ func extract(ctx context.Context) context.Context {
 		return trace.ContextWithRemoteSpanContext(ctx, trace.NewSpanContext(res))
 	}
 	return ctx
+}
+
+func SetTraceID(ctx context.Context, traceId string) context.Context {
+	return context.WithValue(ctx, currentTrace, traceId)
 }

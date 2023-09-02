@@ -18,7 +18,6 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
 )
 
 // ---------------------------- Server ----------------------------
@@ -116,6 +115,7 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 	var handlerErr error
 	tracer := otel.Tracer(o.meta.ServiceName)
 	ctx, span := newClientSpan(ctx, tracer, method)
+	ctx = inject(ctx)
 	defer span.End()
 
 	if body, _ := json.Marshal(req); len(body) > 0 {
@@ -124,15 +124,6 @@ func (jcm *JaegerClientMiddleware) UnaryClientInterceptor(ctx context.Context, m
 		}
 		span.SetAttributes(attribute.String(o.meta.InputHeader, string(body)))
 	}
-
-	// IDGenerate时优先从context获取
-	md, ok := metadata.FromOutgoingContext(ctx)
-	if !ok {
-		md = metadata.MD{}
-	}
-	md.Append(o.meta.TraceHeader, trace.SpanFromContext(ctx).SpanContext().TraceID().String())
-	md.Append(CurrentSpanContext, trace.SpanFromContext(ctx).SpanContext().SpanID().String())
-	ctx = metadata.NewOutgoingContext(ctx, md)
 	handlerErr = invoker(ctx, method, req, reply, cc, opts...)
 	finishClientSpan(span, handlerErr, o.maxBodySize)
 
@@ -204,23 +195,12 @@ type JaegerIDGenerator struct {
 }
 
 func (gen *JaegerIDGenerator) NewIDs(ctx context.Context) (trace.TraceID, trace.SpanID) {
-	o := DefaultOptions()
 	if gen.randSource == nil {
 		gen.defaultIDGenerator()
 	}
-	if ctx.Value(o.meta.TraceHeader) != "" {
-		if str, ok := ctx.Value(o.meta.TraceHeader).(string); ok {
+	if ctx.Value(currentTrace) != "" {
+		if str, ok := ctx.Value(currentTrace).(string); ok {
 			t, _ := trace.TraceIDFromHex(str)
-			return t, gen.newRandSpanID()
-		}
-	}
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		traceIDs := md.Get(o.meta.TraceHeader)
-		if len(traceIDs) > 0 {
-			t, err := trace.TraceIDFromHex(traceIDs[0])
-			if err != nil {
-				return gen.newRandIDs()
-			}
 			return t, gen.newRandSpanID()
 		}
 	}

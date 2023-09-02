@@ -7,7 +7,7 @@ An extensively configurable Go web middleware that integrates Jaeger for distrib
 ### Installation
 
 ```bash
-go get github.com/asoul-fanclub/jaeger-middleware@v0.0.5
+go get github.com/asoul-fanclub/jaeger-middleware@v0.0.7
 ```
 
 ### Example
@@ -71,7 +71,8 @@ func main() {
 	otel.SetTracerProvider(tp)
 	var addr string
 	addr = ":50055"
-	ctx := context.WithValue(context.Background(), "trace-id", "cdde169b504ec847521a2cf1d1ffa9f9")
+	ctx := context.Background()
+	ctx = middleware.SetTraceID(ctx, "cdde169b504ec847521a2cf1d1ffa9f9")
 	req := &proto.GetReq{
 		Name: "xxx",
 	}
